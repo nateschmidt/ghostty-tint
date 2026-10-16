@@ -13,6 +13,12 @@ run `tint ui`.
   color, and a full 16-color palette. The longest matching pattern wins, and a
   pattern covers everything under it. The shell recolors the window before
   each prompt whenever the directory or the config changed.
+- **Themes.** Each folder card has a gallery of 25 prebuilt themes (background,
+  text, cursor, and a light-friendly palette for the light ones). Hover a tile
+  to preview it in the card, click it to fill the folder's colors, or press its
+  "try" to flash it on the selected window. Everything stays editable
+  afterwards, and `test/contrast.py` checks that every theme's text clears
+  WCAG AA (4.5:1) on its background.
 - **Events.** Claude Code hooks recolor the window when something happens in
   it: the turn ended on the /issue sign-off ("Finished"), Claude needs you
   ("Needs you": a Nate Needs To Do This callout, an AskUserQuestion, a

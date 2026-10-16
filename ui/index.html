@@ -133,6 +133,27 @@
   .swatches b { width: 18px; height: 18px; border-radius: 50%; display: block; cursor: pointer; border: 1px solid rgba(255,255,255,.12); transition: transform .1s; }
   .swatches b:hover { transform: scale(1.2); }
 
+  /* Themes */
+  details.themes summary small { color: var(--faint); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+  .themes-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 10px; }
+  .theme {
+    position: relative; border-radius: 7px; overflow: hidden; cursor: pointer; aspect-ratio: 1.15;
+    border: 1px solid rgba(255,255,255,.1); padding: 6px 7px; display: flex; flex-direction: column; gap: 3px;
+    font-size: 8px; line-height: 1.25; transition: transform .12s, box-shadow .12s;
+  }
+  .theme:hover { transform: translateY(-2px); box-shadow: 0 8px 18px -10px rgba(0,0,0,.8); border-color: var(--accent); }
+  .theme.current { box-shadow: 0 0 0 2px var(--accent); }
+  .theme .ln { white-space: nowrap; overflow: hidden; }
+  .theme .dim { opacity: .6; }
+  .theme .blink { display: inline-block; width: 4px; height: 8px; vertical-align: -1px; animation: blink 1.1s steps(1) infinite; }
+  .theme b { margin-top: auto; font-weight: 500; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .theme .peek {
+    position: absolute; top: 4px; right: 4px; font-size: 9px; padding: 1px 5px; border-radius: 4px; line-height: 1.4;
+    background: rgba(0,0,0,.5); color: #fff; border: 0; opacity: 0; transition: opacity .12s;
+  }
+  .theme:hover .peek { opacity: 1; }
+  .theme .peek:hover { background: var(--accent); color: var(--accent-ink); }
+
   /* Events */
   .events { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); }
   .ev { display: grid; grid-template-columns: 56px 1.1fr 1.6fr auto auto; gap: 18px; align-items: center; padding: 16px 18px; border-top: 1px solid var(--line); }
@@ -196,8 +217,9 @@
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const SWATCHES = ["#073a25", "#1e2a20", "#0f3d1f", "#2b5a75", "#1f3a5f", "#2e58aa", "#3d2410", "#5c3a00", "#a0404b", "#4a2040", "#2a2a3a", "#1a1a1a"];
-let state = { config: { folders: [], events: {} }, windows: [], events: [], dirs: [] };
+let state = { config: { folders: [], events: {} }, windows: [], events: [], dirs: [], themes: [] };
 let selectedTty = null;
+const openThemes = new Set(); // folder indexes whose theme gallery is expanded
 let saveTimer = null, previewTimer = null;
 let dirty = false;
 
@@ -259,6 +281,18 @@ function termPreview(f) {
     <div class="ln">› <span class="blink" style="background:${cur}"></span></div>${pal}</div>`;
 }
 
+const sameTheme = (t, f) => t.bg === f.bg && t.fg === f.fg && t.cursor === f.cursor;
+const themeColors = (t) => ({ bg: t.bg, fg: t.fg, cursor: t.cursor, palette: [...t.palette] });
+
+function themeTile(t, j, f) {
+  return `<div class="theme ${sameTheme(t, f) ? "current" : ""}" data-theme="${j}" style="background:${t.bg};color:${t.fg}" title="${t.name}: ${t.bg} on ${t.fg}">
+    <div class="ln dim">~/code/app</div>
+    <div class="ln">› claude <span class="blink" style="background:${t.cursor}"></span></div>
+    <b>${t.name}</b>
+    <button type="button" class="peek" title="Show this theme on the selected window for a few seconds">try</button>
+  </div>`;
+}
+
 function colorField(label, value, opts = {}) {
   const unset = !value;
   return `<label class="f ${opts.full ? "full" : ""}">${label}
@@ -279,7 +313,10 @@ function renderFolders() {
       ${colorField("Background", f.bg, { field: "bg", fallback: "#1a1a1a" })}
       ${colorField("Text", f.fg, { field: "fg", fallback: "#ece5d8", clearable: true, placeholder: "auto" })}
       <div class="full swatches">${SWATCHES.map((c) => `<b style="background:${c}" data-swatch="${c}" title="${c}"></b>`).join("")}</div>
-      <details class="adv full"><summary>Cursor and 16-color palette</summary>
+      <details class="adv full themes" ${openThemes.has(i) ? "open" : ""}><summary>Start from a theme<small>hover to preview, click to use</small></summary>
+        <div class="themes-grid">${state.themes.map((t, j) => themeTile(t, j, f)).join("")}</div>
+      </details>
+      <details class="adv full palette-box"><summary>Cursor and 16-color palette</summary>
         <div style="margin-top:10px">${colorField("Cursor", f.cursor, { field: "cursor", fallback: "#ece5d8", clearable: true, placeholder: "auto" })}</div>
         <div class="palette">${(hasPalette(f) ? f.palette : Array(16).fill("")).map((c, j) => `<input type="color" data-pal="${j}" value="${c || "#000000"}" ${hasPalette(f) ? "" : "disabled style='opacity:.3'"}>`).join("")}</div>
         <div class="pal-actions">${hasPalette(f)
@@ -309,8 +346,17 @@ function bindCard(card) {
   const pa = card.querySelector("[data-pal-action]");
   if (pa) pa.onclick = () => {
     f.palette = pa.dataset.palAction === "start" ? [...state.default_palette] : [];
-    render(); card = $(`.card[data-i="${i}"]`); card.querySelector("details").open = true; previewFolder(f); queueSave();
+    render(); card = $(`.card[data-i="${i}"]`); card.querySelector("details.palette-box").open = true; previewFolder(f); queueSave();
   };
+  const themesBox = card.querySelector("details.themes");
+  themesBox.ontoggle = () => { themesBox.open ? openThemes.add(i) : openThemes.delete(i); };
+  card.querySelectorAll("[data-theme]").forEach((tile) => {
+    const t = state.themes[+tile.dataset.theme];
+    tile.onmouseenter = () => { card.querySelector(".term").outerHTML = termPreview({ ...f, ...themeColors(t) }); };
+    tile.onmouseleave = refresh;
+    tile.onclick = () => { Object.assign(f, themeColors(t)); render(); previewFolder(f); queueSave(); };
+    tile.querySelector(".peek").onclick = (e) => { e.stopPropagation(); tryColor(themeColors(t), e.target); };
+  });
   card.querySelector("[data-del]").onclick = () => {
     if (!confirm(`Remove the rule for ${f.pattern || "this folder"}?`)) return;
     state.config.folders.splice(i, 1); render(); queueSave();
@@ -344,7 +390,7 @@ function renderEvents() {
     const ev = state.config.events[row.dataset.ev];
     row.querySelector(".switch").onclick = () => { ev.enabled = !ev.enabled; renderEvents(); queueSave(); };
     bindColor(row.querySelector(".color"), (v) => { ev.bg = v; queueSave(); });
-    row.querySelector(".try").onclick = () => tryColor(ev.bg, ev.fg, row.querySelector(".try"));
+    row.querySelector(".try").onclick = () => tryColor({ bg: ev.bg, fg: ev.fg }, row.querySelector(".try"));
   });
 }
 
@@ -381,16 +427,18 @@ function previewFolder(f) {
   }, 80);
 }
 
-async function tryColor(bg, fg, btn) {
+async function tryColor(colors, btn) {
+  // Flash colors on the selected window for a few seconds, then put its folder color back.
   const w = state.windows.find((x) => x.tty === selectedTty);
-  if (!w || !bg) return;
+  if (!w || !colors.bg) return;
+  const label = btn.textContent;
   btn.disabled = true; btn.textContent = "Showing…";
   try {
-    await api("POST", "/api/preview", { tty: w.tty, bg, fg });
+    await api("POST", "/api/preview", { tty: w.tty, reset: !!colors.palette, ...colors });
     await new Promise((r) => setTimeout(r, 2500));
     await api("POST", "/api/apply", { tty: w.tty });
   } catch (e) { console.error(e); }
-  btn.disabled = false; btn.textContent = "Try";
+  btn.disabled = false; btn.textContent = label;
 }
 
 $("#apply-all").onclick = async () => {

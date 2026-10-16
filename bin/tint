@@ -49,6 +49,47 @@ DEFAULT_PALETTE = [
     "#4a4a4a", "#f87171", "#5fd985", "#fbbf24", "#a8c4f0", "#d8b4fe", "#7ee7dc", "#ffffff",
 ]
 
+# ANSI colors dark enough to read on a light background (Ghostty's defaults assume a dark one).
+LIGHT_PALETTE = [
+    "#2a241c", "#b3261e", "#1f7a3f", "#9a6700", "#1d5fb4", "#8a3fb0", "#0f7f8c", "#5c5c5c",
+    "#6b6b6b", "#d1403a", "#2e9a55", "#9a6d00", "#2f74d0", "#a35bc9", "#137b86", "#1a1a1a",
+]
+
+
+def theme(name, bg, fg, cursor, light=False):
+    return {"name": name, "bg": bg, "fg": fg, "cursor": cursor, "palette": LIGHT_PALETTE if light else [], "light": light}
+
+
+# Prebuilt starting points for a folder rule. Text clears WCAG AA (4.5:1) on
+# every background; test/contrast.py checks that. Order is the gallery order.
+THEMES = [
+    theme("Forest", "#073a25", "#f5e6b8", "#3cc262"),
+    theme("Moss", "#1e2a20", "#dbe5d3", "#8fd18a"),
+    theme("Pine", "#0f3d1f", "#e3f0d8", "#5fd985"),
+    theme("Teal", "#0f4c4c", "#e0f5f3", "#4dd0c4"),
+    theme("Ocean", "#2b5a75", "#f0f6fa", "#ffd166"),
+    theme("Midnight", "#1f3a5f", "#e6edf7", "#7aa2e8"),
+    theme("Cobalt", "#2e58aa", "#f5f5f5", "#ffd166"),
+    theme("Ink", "#0b1021", "#d7dcef", "#7dd3fc"),
+    theme("Harbor", "#22303c", "#e6edf3", "#58a6ff"),
+    theme("Steel", "#3b4252", "#eceff4", "#88c0d0"),
+    theme("Slate", "#2a2a3a", "#e4e4ee", "#c084fc"),
+    theme("Graphite", "#1a1a1a", "#e8e8e8", "#e8b04a"),
+    theme("Grape", "#3b2a6b", "#ede8fb", "#c4b5fd"),
+    theme("Plum", "#4a2040", "#f6e6f3", "#f0a6d8"),
+    theme("Rose", "#a0404b", "#fff0f1", "#ffe08a"),
+    theme("Brick", "#7a2e2e", "#fde8e8", "#ffd166"),
+    theme("Rust", "#6b3a1f", "#fbeadb", "#ffb37a"),
+    theme("Espresso", "#3d2410", "#f3e2cf", "#f59e0b"),
+    theme("Amber", "#5c3a00", "#fff1d6", "#ffcc66"),
+    theme("Olive", "#3a3f1e", "#f0f2dc", "#c7d36f"),
+    theme("Paper", "#f6f1e7", "#2a241c", "#b2621a", light=True),
+    theme("Mint", "#e6f4ec", "#143d2a", "#1f8f5f", light=True),
+    theme("Sky", "#e8f1fa", "#16304a", "#1d6fb8", light=True),
+    theme("Blush", "#fbeaec", "#4a1c24", "#c2415a", light=True),
+    theme("Lavender", "#eee9f8", "#2d2347", "#6b4fd6", light=True),
+]
+
 # Claude Code hook events `tint hook` listens to, and the tool matcher if any.
 HOOKS = {
     "Stop": None, "Notification": None, "UserPromptSubmit": None,
@@ -492,6 +533,7 @@ def serve(port):
                 "windows": wins,
                 "events": [{"name": n, "label": l, "description": d} for n, (l, d, _, _) in EVENTS.items()],
                 "default_palette": DEFAULT_PALETTE,
+                "themes": THEMES,
                 "dirs": code_dirs(),
             }
 
