@@ -9,6 +9,7 @@
   tint apply-all [--force] recolor every open window (skips windows showing an event unless --force)
   tint serve [--port N]   run the local web UI
   tint ui                 open the web UI in the browser (starts the server if needed)
+  tint install-hooks      write the Claude Code hooks into ~/.claude/settings.json
   tint config-path        print the config file path
 
 Colors are sent as OSC escape sequences, so only the current window changes.
@@ -27,60 +28,41 @@ from pathlib import Path
 HOME = Path.home()
 CONFIG_PATH = Path(os.environ.get("TINT_CONFIG", HOME / ".config" / "tint" / "config.json"))
 STATE_DIR = Path(os.environ.get("TINT_STATE_DIR", HOME / ".cache" / "tint"))
+SETTINGS_PATH = HOME / ".claude" / "settings.json"
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 DEFAULT_PORT = 7337
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-# Event name -> (label, description). The order is the order the UI shows them.
+# Event name -> label, description, default on/off, default color.
+# Order is precedence: an event never replaces one listed above it until the
+# next turn boundary (Stop) or reset clears the window.
 EVENTS = {
-    "done": (
-        "Finished",
-        "The turn ended on the /issue sign-off (\"Ready to clear.\").",
-    ),
-    "needs_you": (
-        "Needs you",
-        "A \"Nate Needs To Do This\" callout, a question, a permission prompt, or \"Waiting on Nate.\"",
-    ),
-    "stopped": (
-        "Turn ended",
-        "Claude stopped and is waiting for your next message, with nothing special to flag.",
-    ),
-    "idle": (
-        "Idle a while",
-        "Claude has been waiting on you for over a minute.",
-    ),
+    "done": ("Finished", "The turn ended on the /issue sign-off (\"Ready to clear.\").", True, "#0f3d1f"),
+    "needs_you": ("Needs you", "A \"Nate Needs To Do This\" callout, a question, a permission prompt, or \"Waiting on Nate.\"", True, "#5c3a00"),
+    "stopped": ("Turn ended", "Claude stopped and is waiting for your next message, with nothing special to flag.", False, "#2a2a3a"),
+    "idle": ("Idle a while", "Claude has been waiting on you for over a minute.", False, "#3a2a2a"),
 }
+RANK = {name: i for i, name in enumerate(EVENTS)}
 
-DEFAULT_CONFIG = {
-    "version": 1,
-    "folders": [],
-    "events": {
-        "done": {"enabled": True, "bg": "#0f3d1f", "fg": ""},
-        "needs_you": {"enabled": True, "bg": "#5c3a00", "fg": ""},
-        "stopped": {"enabled": False, "bg": "#2a2a3a", "fg": ""},
-        "idle": {"enabled": False, "bg": "#3a2a2a", "fg": ""},
-    },
+DEFAULT_PALETTE = [
+    "#1a1a1a", "#ef4444", "#3cc262", "#f59e0b", "#7aa2e8", "#c084fc", "#4dd0c4", "#d4d4d4",
+    "#4a4a4a", "#f87171", "#5fd985", "#fbbf24", "#a8c4f0", "#d8b4fe", "#7ee7dc", "#ffffff",
+]
+
+# Claude Code hook events `tint hook` listens to, and the tool matcher if any.
+HOOKS = {
+    "Stop": None, "Notification": None, "UserPromptSubmit": None,
+    "SessionStart": None, "SessionEnd": None,
+    "PreToolUse": "AskUserQuestion", "PostToolUse": "AskUserQuestion",
 }
+HOOK_COMMAND = '"$HOME/.local/bin/tint" hook'
 
 
 # ---------------------------------------------------------------- config
 
-def load_config():
-    try:
-        data = json.loads(CONFIG_PATH.read_text())
-    except (OSError, ValueError):
-        data = {}
-    cfg = {"version": 1, "folders": [], "events": {}}
-    for f in data.get("folders") or []:
-        cfg["folders"].append(normalize_folder(f))
-    for name in EVENTS:
-        ev = dict(DEFAULT_CONFIG["events"][name])
-        ev.update({k: v for k, v in (data.get("events", {}).get(name) or {}).items() if k in ev})
-        ev["enabled"] = bool(ev["enabled"])
-        ev["bg"] = color_or_blank(ev["bg"])
-        ev["fg"] = color_or_blank(ev["fg"])
-        cfg["events"][name] = ev
-    return cfg
+def color_or_blank(value):
+    value = str(value or "").strip().lower()
+    return value if HEX.match(value) else ""
 
 
 def normalize_folder(f):
@@ -95,9 +77,27 @@ def normalize_folder(f):
     }
 
 
-def color_or_blank(value):
-    value = str(value or "").strip().lower()
-    return value if HEX.match(value) else ""
+def normalize_config(data):
+    events = {}
+    for name, (_, _, enabled, bg) in EVENTS.items():
+        ev = data.get("events", {}).get(name) or {}
+        events[name] = {
+            "enabled": bool(ev.get("enabled", enabled)),
+            "bg": color_or_blank(ev.get("bg", bg)),
+            "fg": color_or_blank(ev.get("fg")),
+        }
+    return {
+        "version": 1,
+        "folders": [normalize_folder(f) for f in data.get("folders") or []],
+        "events": events,
+    }
+
+
+def load_config():
+    try:
+        return normalize_config(json.loads(CONFIG_PATH.read_text()))
+    except (OSError, ValueError):
+        return normalize_config({})
 
 
 def save_config(cfg):
@@ -135,28 +135,24 @@ def seq_defaults():
     return osc(110) + osc(111) + osc(112) + osc(104)
 
 
-def seq_folder(folder):
-    seq = seq_defaults()
-    if not folder:
-        return seq
-    if folder["bg"]:
-        seq += osc(11, folder["bg"])
-    if folder["fg"]:
-        seq += osc(10, folder["fg"])
-    if folder["cursor"]:
-        seq += osc(12, folder["cursor"])
-    for i, color in enumerate(folder["palette"]):
-        seq += osc(4, "%d;%s" % (i, color))
-    return seq
-
-
-def seq_colors(bg, fg=""):
+def seq_colors(bg="", fg="", cursor="", palette=()):
+    """Overlay whichever colors are given, leaving the rest as they are."""
     seq = ""
     if bg:
         seq += osc(11, bg)
     if fg:
         seq += osc(10, fg)
+    if cursor:
+        seq += osc(12, cursor)
+    for i, color in enumerate(palette):
+        seq += osc(4, "%d;%s" % (i, color))
     return seq
+
+
+def seq_folder(folder):
+    if not folder:
+        return seq_defaults()
+    return seq_defaults() + seq_colors(folder["bg"], folder["fg"], folder["cursor"], folder["palette"])
 
 
 def write_tty(tty, seq):
@@ -181,27 +177,6 @@ def ps(args):
         return ""
 
 
-def my_tty():
-    """The terminal this process belongs to. Hooks have no tty on stdio, so walk up to the first ancestor that does."""
-    for fd in (1, 2, 0):
-        try:
-            return os.ttyname(fd)
-        except OSError:
-            pass
-    pid = os.getpid()
-    for _ in range(25):
-        out = ps(["-o", "tty=,ppid=", "-p", str(pid)]).split()
-        if len(out) < 2:
-            return None
-        tty, ppid = out[0], out[1]
-        if tty != "??":
-            return "/dev/" + tty
-        pid = int(ppid)
-        if pid <= 1:
-            return None
-    return None
-
-
 def process_table():
     rows = {}
     for line in ps(["-axo", "pid=,ppid=,tty=,comm="]).splitlines():
@@ -211,6 +186,29 @@ def process_table():
         pid, ppid, tty, comm = int(parts[0]), int(parts[1]), parts[2], parts[3]
         rows[pid] = {"pid": pid, "ppid": ppid, "tty": tty, "comm": comm}
     return rows
+
+
+def my_tty():
+    """The terminal this process belongs to.
+
+    The shell plugin exports TINT_TTY, which Claude and its hooks inherit. Without
+    it (hooks have no tty on stdio), walk up to the first ancestor that has one.
+    """
+    env = os.environ.get("TINT_TTY", "")
+    if env.startswith("/dev/"):
+        return env
+    for fd in (1, 2, 0):
+        try:
+            return os.ttyname(fd)
+        except OSError:
+            pass
+    rows = process_table()
+    pid = os.getpid()
+    while pid > 1 and pid in rows:
+        if rows[pid]["tty"] != "??":
+            return "/dev/" + rows[pid]["tty"]
+        pid = rows[pid]["ppid"]
+    return None
 
 
 SHELLS = {"zsh", "bash", "fish", "sh"}
@@ -229,6 +227,19 @@ def in_ghostty(pid, rows):
             return True
         pid = row["ppid"]
     return False
+
+
+def session_shells(rows):
+    """tty -> the shell that owns that terminal window (not a subshell)."""
+    shells = {}
+    for row in rows.values():
+        if row["tty"] == "??" or not is_shell(row["comm"]):
+            continue
+        parent = rows.get(row["ppid"])
+        if parent and parent["tty"] == row["tty"] and is_shell(parent["comm"]):
+            continue
+        shells.setdefault(row["tty"], row)
+    return shells
 
 
 def cwds(pids):
@@ -250,53 +261,28 @@ def cwds(pids):
     return result
 
 
-def windows(rows=None):
-    """One entry per Ghostty window: its session shell, cwd, matched folder, and event state."""
-    rows = rows or process_table()
-    shells = {}
-    for row in rows.values():
-        if row["tty"] == "??" or not is_shell(row["comm"]):
-            continue
-        parent = rows.get(row["ppid"])
-        if parent and parent["tty"] == row["tty"] and is_shell(parent["comm"]):
-            continue  # a subshell; the session shell is its ancestor
-        if not in_ghostty(row["pid"], rows):
-            continue
-        shells.setdefault(row["tty"], row)
-    claude_ttys = {r["tty"] for r in rows.values() if os.path.basename(r["comm"]) == "claude"}
+def windows(cfg):
+    """One entry per Ghostty window: its cwd, matched folder, and event state."""
+    rows = process_table()
+    shells = {tty: s for tty, s in session_shells(rows).items() if in_ghostty(s["pid"], rows)}
     cwd_by_pid = cwds([s["pid"] for s in shells.values()])
-    cfg = load_config()
     result = []
     for tty, shell in sorted(shells.items()):
         cwd = cwd_by_pid.get(shell["pid"], "")
         folder = match_folder(cfg, cwd) if cwd else None
-        state = read_state(tty)
         result.append({
             "tty": "/dev/" + tty,
-            "pid": shell["pid"],
             "cwd": cwd,
             "folder": folder["pattern"] if folder else "",
             "name": (folder and folder["name"]) or (os.path.basename(cwd) if cwd else tty),
-            "bg": (folder or {}).get("bg", ""),
-            "fg": (folder or {}).get("fg", ""),
-            "event": state.get("event", ""),
-            "event_at": state.get("at", 0),
-            "claude": tty in claude_ttys,
+            "event": read_state(tty).get("event", ""),
         })
     return result
 
 
 def shell_cwd(tty):
-    rows = process_table()
-    short = tty.replace("/dev/", "")
-    for row in rows.values():
-        if row["tty"] != short or not is_shell(row["comm"]):
-            continue
-        parent = rows.get(row["ppid"])
-        if parent and parent["tty"] == short and is_shell(parent["comm"]):
-            continue
-        return cwds([row["pid"]]).get(row["pid"], "")
-    return ""
+    shell = session_shells(process_table()).get(tty.replace("/dev/", ""))
+    return cwds([shell["pid"]]).get(shell["pid"], "") if shell else ""
 
 
 # ---------------------------------------------------------------- state
@@ -326,37 +312,35 @@ def clear_state(tty):
 
 # ---------------------------------------------------------------- actions
 
-def apply_folder(tty, cwd, cfg=None):
-    cfg = cfg or load_config()
+def apply_folder(tty, cwd, cfg):
     write_tty(tty, seq_folder(match_folder(cfg, cwd)))
     clear_state(tty)
 
 
-def reset_window(tty, fallback_cwd=""):
-    apply_folder(tty, shell_cwd(tty) or fallback_cwd or os.getcwd())
+def reset_window(tty, cfg, fallback_cwd=""):
+    apply_folder(tty, shell_cwd(tty) or fallback_cwd or os.getcwd(), cfg)
 
 
-def apply_event(tty, name, cfg=None):
-    cfg = cfg or load_config()
+def apply_event(tty, name, cfg):
+    """Tint the window for an event unless it is disabled or outranked by the event already showing."""
     ev = cfg["events"].get(name)
+    current = read_state(tty).get("event")
     if not ev or not ev["enabled"] or not ev["bg"]:
-        return False
+        return
+    if current in RANK and RANK[current] < RANK[name]:
+        return
     write_tty(tty, seq_colors(ev["bg"], ev["fg"]))
     write_state(tty, name)
-    return True
 
 
-def apply_all(force=False):
-    cfg = load_config()
-    done = []
-    for w in windows():
-        if w["event"] and not force:
-            continue
-        if not w["cwd"]:
-            continue
-        apply_folder(w["tty"], w["cwd"], cfg)
-        done.append(w["tty"])
-    return done
+def apply_all(cfg, wins, force=False):
+    applied = []
+    for w in wins:
+        if w["cwd"] and (force or not w["event"]):
+            apply_folder(w["tty"], w["cwd"], cfg)
+            w["event"] = ""
+            applied.append(w["tty"])
+    return applied
 
 
 # ---------------------------------------------------------------- Claude Code hook
@@ -410,26 +394,67 @@ def cmd_hook():
     tty = my_tty()
     if not tty:
         return
+    cfg = load_config()
     name = data.get("hook_event_name", "")
     cwd = data.get("cwd", "")
+
+    def reset_if_tinted():
+        if state_path(tty).exists():
+            reset_window(tty, cfg, cwd)
+
     if name == "Stop":
-        event = classify_stop(data)
-        if not apply_event(tty, event):
-            reset_window(tty, cwd)
+        reset_if_tinted()
+        apply_event(tty, classify_stop(data), cfg)
     elif name == "Notification":
         kind = data.get("notification_type", "")
         if kind in ("permission_prompt", "elicitation_dialog"):
-            apply_event(tty, "needs_you")
-        elif kind == "idle_prompt" and read_state(tty).get("event", "stopped") == "stopped":
-            apply_event(tty, "idle")
+            apply_event(tty, "needs_you", cfg)
+        elif kind == "idle_prompt":
+            apply_event(tty, "idle", cfg)
     elif name == "PreToolUse":
         if data.get("tool_name") == "AskUserQuestion":
-            apply_event(tty, "needs_you")
-    elif name in ("PostToolUse", "UserPromptSubmit", "SessionStart", "SessionEnd"):
-        reset_window(tty, cwd)
+            apply_event(tty, "needs_you", cfg)
+    else:  # PostToolUse, UserPromptSubmit, SessionStart, SessionEnd
+        reset_if_tinted()
+
+
+def install_hooks():
+    """Replace every tint hook entry in ~/.claude/settings.json with the current HOOKS table."""
+    try:
+        settings = json.loads(SETTINGS_PATH.read_text())
+    except (OSError, ValueError):
+        settings = {}
+    hooks = settings.setdefault("hooks", {})
+    for event in list(hooks):
+        hooks[event] = [e for e in hooks[event] if not any("tint" in (h.get("command") or "") for h in e.get("hooks", []))]
+    for event, matcher in HOOKS.items():
+        entry = {"hooks": [{"type": "command", "command": HOOK_COMMAND, "timeout": 10}]}
+        if matcher:
+            entry["matcher"] = matcher
+        hooks.setdefault(event, []).append(entry)
+    settings["hooks"] = {k: v for k, v in hooks.items() if v}
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
 
 
 # ---------------------------------------------------------------- web UI
+
+_dirs_cache = {}
+
+
+def code_dirs():
+    """Subfolders of ~/code and ~/worktrees for the folder pattern picker, cached per directory mtime."""
+    dirs = []
+    for base in (HOME / "code", HOME / "worktrees"):
+        try:
+            mtime = base.stat().st_mtime
+        except OSError:
+            continue
+        if _dirs_cache.get(base, (None,))[0] != mtime:
+            names = ["~/" + str(e.relative_to(HOME)) for e in sorted(base.iterdir()) if e.is_dir() and not e.name.startswith(".")]
+            _dirs_cache[base] = (mtime, names)
+        dirs.extend(_dirs_cache[base][1])
+    return dirs
+
 
 def serve(port):
     import http.server
@@ -440,13 +465,18 @@ def serve(port):
         def log_message(self, *args):
             pass
 
-        def send_json(self, obj, status=200):
-            body = json.dumps(obj).encode()
+        def send_bytes(self, body, ctype, status=200):
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def send_json(self, obj, status=200):
+            self.send_bytes(json.dumps(obj).encode(), "application/json", status)
+
+        def not_found(self):
+            self.send_json({"error": "not found"}, 404)
 
         def read_json(self):
             length = int(self.headers.get("Content-Length") or 0)
@@ -455,43 +485,36 @@ def serve(port):
             except ValueError:
                 return {}
 
-        def state(self):
+        def state(self, cfg, wins):
             return {
-                "config": load_config(),
+                "config": cfg,
                 "config_path": str(CONFIG_PATH),
-                "windows": windows(),
-                "events": [{"name": n, "label": l, "description": d} for n, (l, d) in EVENTS.items()],
+                "windows": wins,
+                "events": [{"name": n, "label": l, "description": d} for n, (l, d, _, _) in EVENTS.items()],
+                "default_palette": DEFAULT_PALETTE,
                 "dirs": code_dirs(),
             }
 
         def do_GET(self):
             path = urlparse(self.path).path
             if path == "/api/state":
-                return self.send_json(self.state())
+                cfg = load_config()
+                return self.send_json(self.state(cfg, windows(cfg)))
             if path in ("/", "/index.html"):
                 try:
-                    body = (UI_DIR / "index.html").read_bytes()
+                    return self.send_bytes((UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
                 except OSError:
                     return self.send_json({"error": "ui/index.html missing"}, 500)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                return self.wfile.write(body)
-            self.send_json({"error": "not found"}, 404)
+            self.not_found()
 
         def do_PUT(self):
             if urlparse(self.path).path != "/api/config":
-                return self.send_json({"error": "not found"}, 404)
-            data = self.read_json()
-            cfg = {"version": 1, "folders": [normalize_folder(f) for f in data.get("folders") or []], "events": {}}
-            for name in EVENTS:
-                ev = dict(DEFAULT_CONFIG["events"][name])
-                ev.update({k: v for k, v in (data.get("events", {}).get(name) or {}).items() if k in ev})
-                cfg["events"][name] = {"enabled": bool(ev["enabled"]), "bg": color_or_blank(ev["bg"]), "fg": color_or_blank(ev["fg"])}
+                return self.not_found()
+            cfg = normalize_config(self.read_json())
             save_config(cfg)
-            apply_all()
-            self.send_json(self.state())
+            wins = windows(cfg)
+            apply_all(cfg, wins)
+            self.send_json(self.state(cfg, wins))
 
         def do_POST(self):
             path = urlparse(self.path).path
@@ -499,21 +522,22 @@ def serve(port):
             tty = data.get("tty") or ""
             if tty and not re.match(r"^/dev/ttys\d+$", tty):
                 return self.send_json({"error": "bad tty"}, 400)
+            cfg = load_config()
             if path == "/api/apply":
                 if tty:
-                    reset_window(tty)
+                    reset_window(tty, cfg)
                     applied = [tty]
+                    wins = windows(cfg)
                 else:
-                    applied = apply_all(force=bool(data.get("force")))
-                return self.send_json({"applied": applied, "windows": windows()})
+                    wins = windows(cfg)
+                    applied = apply_all(cfg, wins, force=bool(data.get("force")))
+                return self.send_json({"applied": applied, "windows": wins})
             if path == "/api/preview" and tty:
-                folder = normalize_folder(data) if data.get("palette") or data.get("cursor") else None
-                if folder:
-                    write_tty(tty, seq_folder(folder))
-                else:
-                    write_tty(tty, seq_colors(color_or_blank(data.get("bg")), color_or_blank(data.get("fg"))))
+                colors = normalize_folder(data)
+                seq = seq_colors(colors["bg"], colors["fg"], colors["cursor"], colors["palette"])
+                write_tty(tty, (seq_defaults() if data.get("reset") else "") + seq)
                 return self.send_json({"ok": True})
-            self.send_json({"error": "not found"}, 404)
+            self.not_found()
 
     class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
@@ -522,18 +546,6 @@ def serve(port):
     with Server(("127.0.0.1", port), Handler) as httpd:
         print("tint ui on http://127.0.0.1:%d" % port, flush=True)
         httpd.serve_forever()
-
-
-def code_dirs():
-    dirs = []
-    for base in (HOME / "code", HOME / "worktrees"):
-        try:
-            for entry in sorted(base.iterdir()):
-                if entry.is_dir() and not entry.name.startswith("."):
-                    dirs.append("~/" + str(entry.relative_to(HOME)))
-        except OSError:
-            pass
-    return dirs
 
 
 def server_running(port):
@@ -565,30 +577,31 @@ def port_arg(args):
 def main(argv):
     cmd = argv[0] if argv else "apply"
     args = argv[1:]
-    if cmd == "apply":
+    if cmd in ("apply", "reset", "event"):
         tty = my_tty()
-        cwd = os.path.abspath(args[0]) if args else os.getcwd()
-        if tty:
-            apply_folder(tty, cwd)
-    elif cmd == "reset":
-        tty = my_tty()
-        if tty:
-            reset_window(tty)
-    elif cmd == "event":
-        tty = my_tty()
-        if tty and args:
-            apply_event(tty, args[0])
+        if not tty:
+            return
+        cfg = load_config()
+        if cmd == "apply":
+            apply_folder(tty, os.path.abspath(args[0]) if args else os.getcwd(), cfg)
+        elif cmd == "reset":
+            reset_window(tty, cfg)
+        elif args:
+            apply_event(tty, args[0], cfg)
     elif cmd == "hook":
         cmd_hook()
     elif cmd == "windows":
-        for w in windows():
+        for w in windows(load_config()):
             print("%-9s %-10s %-12s %s" % (w["tty"].replace("/dev/", ""), w["event"] or "-", w["name"][:12], w["cwd"]))
     elif cmd == "apply-all":
-        print("\n".join(apply_all(force="--force" in args)))
+        cfg = load_config()
+        print("\n".join(apply_all(cfg, windows(cfg), force="--force" in args)))
     elif cmd == "serve":
         serve(port_arg(args))
     elif cmd == "ui":
         cmd_ui(port_arg(args))
+    elif cmd == "install-hooks":
+        install_hooks()
     elif cmd == "config-path":
         print(CONFIG_PATH)
     else:
