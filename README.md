@@ -59,6 +59,7 @@ tint windows            list open Ghostty windows with folder and state
 tint apply-all [--force]  recolor every open window (skips windows showing an event unless --force)
 tint serve [--port N]   run the web UI in the foreground
 tint ui                 open the web UI (starts the server if it is not running)
+tint install-hooks      write the Claude Code hooks into ~/.claude/settings.json
 tint config-path        print the config file path
 ```
 

@@ -10,6 +10,10 @@
 
 [[ $TERM_PROGRAM == ghostty ]] || return 0
 
+# Claude Code and its hooks inherit this, so `tint hook` knows its window
+# without walking the process tree.
+export TINT_TTY=$TTY
+
 typeset -g TINT_BIN=${TINT_BIN:-$HOME/.local/bin/tint}
 typeset -g _tint_config=${TINT_CONFIG:-$HOME/.config/tint/config.json}
 typeset -g _tint_state=${TINT_STATE_DIR:-$HOME/.cache/tint}/${TTY#/dev/}.json

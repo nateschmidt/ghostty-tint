@@ -86,7 +86,6 @@
   .win .meta strong { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .win .meta span { color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chip { position: absolute; top: 8px; right: 8px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; background: rgba(0,0,0,.45); color: #fff; backdrop-filter: blur(4px); }
-  .chip.done { background: #0f3d1f; } .chip.needs_you { background: #5c3a00; } .chip.idle { background: #3a2a2a; } .chip.stopped { background: #2a2a3a; }
   .empty { color: var(--muted); padding: 28px; border: 1px dashed var(--line-strong); border-radius: 10px; text-align: center; }
 
   /* Folders */
@@ -199,7 +198,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const SWATCHES = ["#073a25", "#1e2a20", "#0f3d1f", "#2b5a75", "#1f3a5f", "#2e58aa", "#3d2410", "#5c3a00", "#a0404b", "#4a2040", "#2a2a3a", "#1a1a1a"];
 let state = { config: { folders: [], events: {} }, windows: [], events: [], dirs: [] };
 let selectedTty = null;
-let saveTimer = null, previewTimer = null, pollTimer = null;
+let saveTimer = null, previewTimer = null;
 let dirty = false;
 
 const api = async (method, path, body) => {
@@ -216,16 +215,11 @@ const readable = (bg) => {
   return lum > 0.6 ? "#111" : "#f3ede0";
 };
 const folderFor = (w) => state.config.folders.find((f) => f.pattern === w.folder);
-const eventMeta = (name) => state.events.find((e) => e.name === name) || { label: name };
-
-function effectiveColors(w) {
-  if (w.event) {
-    const ev = state.config.events[w.event] || {};
-    return { bg: ev.bg || "#2a2a3a", fg: ev.fg || readable(ev.bg) };
-  }
-  const f = folderFor(w);
-  return { bg: f?.bg || "#1a1a1a", fg: f?.fg || readable(f?.bg) };
-}
+const eventMeta = (name) => state.events.find((e) => e.name === name);
+const colorsOf = (c) => ({ bg: c?.bg || "#1a1a1a", fg: c?.fg || readable(c?.bg) });
+const hasPalette = (f) => f.palette?.length === 16;
+const windowsIn = (f) => state.windows.filter((w) => w.folder === f.pattern);
+const effectiveColors = (w) => colorsOf(w.event ? state.config.events[w.event] : folderFor(w));
 
 // ---------------------------------------------------------------- render
 
@@ -247,7 +241,7 @@ function renderWindows() {
     const short = w.cwd.replace(/^\/Users\/[^/]+/, "~");
     return `<div class="win ${w.tty === selectedTty ? "selected" : ""}" data-tty="${w.tty}" title="${w.tty}  ${w.cwd}">
       <div class="screen" style="background:${c.bg};color:${c.fg}"><i></i><i></i><i></i><span class="cursor"></span></div>
-      ${w.event ? `<span class="chip ${w.event}">${eventMeta(w.event).label}</span>` : ""}
+      ${w.event ? `<span class="chip" style="background:${state.config.events[w.event].bg}">${eventMeta(w.event).label}</span>` : ""}
       <div class="meta"><strong>${w.name}</strong><span>${short || w.tty}</span></div>
     </div>`;
   }).join("");
@@ -255,9 +249,9 @@ function renderWindows() {
 }
 
 function termPreview(f) {
-  const bg = f.bg || "#1a1a1a", fg = f.fg || readable(f.bg), cur = f.cursor || fg;
+  const { bg, fg } = colorsOf(f), cur = f.cursor || fg;
   const name = f.name || (f.pattern || "folder").split("/").filter(Boolean).pop() || "folder";
-  const pal = f.palette?.length === 16 ? `<div class="pal">${f.palette.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` : "";
+  const pal = hasPalette(f) ? `<div class="pal">${f.palette.map((c) => `<i style="background:${c}"></i>`).join("")}</div>` : "";
   return `<div class="term" style="background:${bg};color:${fg}">
     <div class="ln dim">~ ${f.pattern || "…"}</div>
     <div class="ln">${name} <span class="dim">(main)</span> › claude</div>
@@ -287,8 +281,8 @@ function renderFolders() {
       <div class="full swatches">${SWATCHES.map((c) => `<b style="background:${c}" data-swatch="${c}" title="${c}"></b>`).join("")}</div>
       <details class="adv full"><summary>Cursor and 16-color palette</summary>
         <div style="margin-top:10px">${colorField("Cursor", f.cursor, { field: "cursor", fallback: "#ece5d8", clearable: true, placeholder: "auto" })}</div>
-        <div class="palette">${(f.palette?.length === 16 ? f.palette : Array(16).fill("")).map((c, j) => `<input type="color" data-pal="${j}" value="${c || "#000000"}" ${f.palette?.length === 16 ? "" : "disabled style='opacity:.3'"}>`).join("")}</div>
-        <div class="pal-actions">${f.palette?.length === 16
+        <div class="palette">${(hasPalette(f) ? f.palette : Array(16).fill("")).map((c, j) => `<input type="color" data-pal="${j}" value="${c || "#000000"}" ${hasPalette(f) ? "" : "disabled style='opacity:.3'"}>`).join("")}</div>
+        <div class="pal-actions">${hasPalette(f)
           ? `<button type="button" class="quiet" data-pal-action="clear">Use Ghostty's palette</button>`
           : `<button type="button" class="quiet" data-pal-action="start">Customize palette</button>`}</div>
       </details>
@@ -297,11 +291,11 @@ function renderFolders() {
   </article>`).join("") + `<div class="add" id="add">+ add a folder</div>`;
 
   el.querySelectorAll(".card").forEach(bindCard);
-  $("#add").onclick = () => { state.config.folders.push({ name: "", pattern: "~/code/", bg: "#1e2a20", fg: "", cursor: "", palette: [] }); render(); el.lastElementChild.previousElementSibling.querySelector("[data-field=name]").focus(); queueSave(); };
+  $("#add").onclick = () => { state.config.folders.push({ name: "", pattern: "~/code/", bg: "#1e2a20", fg: "", cursor: "", palette: [] }); render(); el.querySelector(".card:last-of-type [data-field=name]").focus(); queueSave(); };
 }
 
 function matchCount(f) {
-  const n = state.windows.filter((w) => w.folder === f.pattern).length;
+  const n = windowsIn(f).length;
   return n ? `${n} open window${n > 1 ? "s" : ""}` : "";
 }
 
@@ -314,9 +308,7 @@ function bindCard(card) {
   card.querySelectorAll("[data-pal]").forEach((inp) => inp.oninput = () => { f.palette[+inp.dataset.pal] = inp.value; refresh(); previewFolder(f); queueSave(); });
   const pa = card.querySelector("[data-pal-action]");
   if (pa) pa.onclick = () => {
-    f.palette = pa.dataset.palAction === "start"
-      ? ["#1a1a1a", "#ef4444", "#3cc262", "#f59e0b", "#7aa2e8", "#c084fc", "#4dd0c4", "#d4d4d4", "#4a4a4a", "#f87171", "#5fd985", "#fbbf24", "#a8c4f0", "#d8b4fe", "#7ee7dc", "#ffffff"]
-      : [];
+    f.palette = pa.dataset.palAction === "start" ? [...state.default_palette] : [];
     render(); card = $(`.card[data-i="${i}"]`); card.querySelector("details").open = true; previewFolder(f); queueSave();
   };
   card.querySelector("[data-del]").onclick = () => {
@@ -339,7 +331,7 @@ function bindColor(box, onChange) {
 
 function renderEvents() {
   $("#events").innerHTML = state.events.map((meta) => {
-    const ev = state.config.events[meta.name] || { enabled: false, bg: "", fg: "" };
+    const ev = state.config.events[meta.name];
     return `<div class="ev ${ev.enabled ? "" : "off"}" data-ev="${meta.name}">
       <button class="switch ${ev.enabled ? "on" : ""}" type="button" aria-label="toggle"></button>
       <div class="label">${meta.label}</div>
@@ -384,8 +376,8 @@ function previewFolder(f) {
   // Live-preview on every open window currently in this folder.
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => {
-    state.windows.filter((w) => w.folder === f.pattern && !w.event)
-      .forEach((w) => api("POST", "/api/preview", { tty: w.tty, bg: f.bg, fg: f.fg, cursor: f.cursor, palette: f.palette }).catch(() => {}));
+    windowsIn(f).filter((w) => !w.event)
+      .forEach((w) => api("POST", "/api/preview", { tty: w.tty, reset: true, ...f }).catch(() => {}));
   }, 80);
 }
 
@@ -413,7 +405,8 @@ $("#apply-all").onclick = async () => {
 async function load(initial) {
   try {
     const fresh = await api("GET", "/api/state");
-    if (initial || !dirty) { state = fresh; render(); if (initial) setStatus("Saved", ""); }
+    const configChanged = JSON.stringify(fresh.config) !== JSON.stringify(state.config);
+    if (initial || (!dirty && configChanged)) { state = fresh; render(); if (initial) setStatus("Saved", ""); }
     else { state.windows = fresh.windows; renderWindows(); }
   } catch (e) {
     setStatus("Server unreachable", "error");
@@ -421,7 +414,7 @@ async function load(initial) {
 }
 
 load(true);
-pollTimer = setInterval(() => load(false), 4000);
+setInterval(() => load(false), 4000);
 </script>
 </body>
 </html>
