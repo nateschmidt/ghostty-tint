@@ -455,7 +455,12 @@ def cmd_hook():
     elif name == "PreToolUse":
         if data.get("tool_name") == "AskUserQuestion":
             apply_event(tty, "needs_you", cfg)
-    else:  # PostToolUse, UserPromptSubmit, SessionStart, SessionEnd
+    elif name == "SessionStart":
+        # A Claude launched straight from a non-interactive shell (the nateai
+        # worker windows: `zsh -lic "cd repo && claude ..."`) never drew a
+        # prompt, so the zsh plugin has not applied the folder color yet.
+        reset_window(tty, cfg, cwd)
+    else:  # PostToolUse, UserPromptSubmit, SessionEnd
         reset_if_tinted()
 
 
