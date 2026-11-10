@@ -38,7 +38,7 @@ HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 # next turn boundary (Stop) or reset clears the window.
 EVENTS = {
     "done": ("Finished", "The turn ended on the /issue sign-off (\"Ready to clear.\").", True, "#0f3d1f"),
-    "needs_you": ("Needs you", "A \"Nate Needs To Do This\" callout, a question, a permission prompt, or \"Waiting on Nate.\"", True, "#5c3a00"),
+    "needs_you": ("Needs you", "A \"Needs To Do This\" callout, a question, a permission prompt, or \"Waiting on <name>.\"", True, "#5c3a00"),
     "stopped": ("Turn ended", "Claude stopped and is waiting for your next message, with nothing special to flag.", False, "#2a2a3a"),
     "idle": ("Idle a while", "Claude has been waiting on you for over a minute.", False, "#3a2a2a"),
 }
@@ -416,13 +416,18 @@ def last_assistant_text(path):
     return ""
 
 
+# Any owner's name works, so the same hooks serve whoever's sign-off the skill prints.
+NEEDS_BOX = re.compile(r"\b[A-Z]+ NEEDS TO DO THIS\b")
+WAITING_ON = re.compile(r"Waiting on [A-Z]\w+\.")
+
+
 def classify_stop(data):
     text = data.get("last_assistant_message") or last_assistant_text(data.get("transcript_path") or "")
     lines = [l for l in text.splitlines() if l.strip(" `")]
     last = lines[-1] if lines else ""
     if "Ready to clear." in last:
         return "done"
-    if "NATE NEEDS TO DO THIS" in text or "Waiting on Nate." in last:
+    if NEEDS_BOX.search(text) or WAITING_ON.search(last):
         return "needs_you"
     return "stopped"
 
