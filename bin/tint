@@ -456,7 +456,7 @@ def cmd_hook():
         if data.get("tool_name") == "AskUserQuestion":
             apply_event(tty, "needs_you", cfg)
     elif name == "SessionStart":
-        # A Claude launched straight from a non-interactive shell (the nateai
+        # A Claude launched straight from a non-interactive shell (the swarm
         # worker windows: `zsh -lic "cd repo && claude ..."`) never drew a
         # prompt, so the zsh plugin has not applied the folder color yet.
         reset_window(tty, cfg, cwd)
