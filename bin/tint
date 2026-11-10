@@ -39,7 +39,7 @@ HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 # next turn boundary (Stop) or reset clears the window.
 EVENTS = {
     "done": ("Finished", "The turn ended on the /issue sign-off (\"Ready to clear.\").", True, "#0f3d1f"),
-    "needs_you": ("Needs you", "A \"Needs To Do This\" callout, a question, a permission prompt, or \"Waiting on <name>.\"", True, "#5c3a00"),
+    "needs_you": ("Needs you", "A \"Needs To Do This\" callout, a turn that ends on a question, a permission prompt, or \"Waiting on <name>.\"", True, "#5c3a00"),
     "stopped": ("Turn ended", "Claude stopped and is waiting for your next message, with nothing special to flag.", False, "#2a2a3a"),
     "idle": ("Idle a while", "Claude has been waiting on you for over a minute.", False, "#3a2a2a"),
 }
@@ -428,7 +428,7 @@ def classify_stop(data):
     last = lines[-1] if lines else ""
     if "Ready to clear." in last:
         return "done"
-    if NEEDS_BOX.search(text) or WAITING_ON.search(last):
+    if NEEDS_BOX.search(text) or WAITING_ON.search(last) or last.rstrip(" *_`\"')").endswith("?"):
         return "needs_you"
     return "stopped"
 
