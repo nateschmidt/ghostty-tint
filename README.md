@@ -22,7 +22,7 @@ run `tint ui`.
 - **Events.** Claude Code hooks recolor the window when something happens in
   it: the turn ended on the /issue sign-off ("Finished"), Claude needs you
   ("Needs you": a Nate Needs To Do This callout, an AskUserQuestion, a
-  permission prompt, or "Waiting on Nate."), the turn ended with nothing to
+  permission prompt, or "Waiting on <name>."), the turn ended with nothing to
   flag ("Turn ended"), or Claude has been waiting on you for over a minute
   ("Idle a while"). Each event has an on/off switch and a color.
 - **Back to the folder color** on your next message, on `/clear`, when the
