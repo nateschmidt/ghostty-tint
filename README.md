@@ -40,9 +40,9 @@ changes and Ghostty's own config is untouched.
 | Path | Purpose |
 | --- | --- |
 | `bin/tint` | The CLI and hook entry point, plus the web server (Python 3, no dependencies). |
-| `shell/tint.zsh` | oh-my-zsh custom plugin: a precmd hook that calls `tint apply` when needed. |
+| `shell/tint.zsh` | zsh plugin: a precmd hook that calls `tint apply` when needed. Loaded by oh-my-zsh, or sourced from `~/.zshrc` on a Mac without it. |
 | `ui/index.html` | The web page, vanilla HTML/JS, served by `tint serve`. |
-| `install.sh` | Symlinks, seeds the config, wires the Claude Code hooks, loads the launch agent. Safe to re-run. |
+| `install.sh` | Symlinks, seeds the config with one color per project folder in `~/code`, wires the Claude Code hooks, loads the launch agent. Works on a new Mac with plain zsh. Safe to re-run. |
 | `launchd/` | Template for the launch agent that keeps the UI running. |
 
 State on this Mac:

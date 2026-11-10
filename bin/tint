@@ -11,6 +11,7 @@
   tint ui                 open the web UI in the browser (starts the server if needed)
   tint install-hooks      write the Claude Code hooks into ~/.claude/settings.json
   tint config-path        print the config file path
+  tint seed-config        create the config from the project folders in ~/code (never overwrites)
 
 Colors are sent as OSC escape sequences, so only the current window changes.
 Every command exits 0: a hook must never break a Claude Code session.
@@ -473,8 +474,10 @@ def install_hooks():
     """Replace every tint hook entry in ~/.claude/settings.json with the current HOOKS table."""
     try:
         settings = json.loads(SETTINGS_PATH.read_text())
-    except (OSError, ValueError):
+    except OSError:  # a Mac where Claude Code has no settings file yet
         settings = {}
+    except ValueError:
+        sys.exit("tint: %s is not valid JSON; fix it and run `tint install-hooks` again" % SETTINGS_PATH)
     hooks = settings.setdefault("hooks", {})
     for event in list(hooks):
         hooks[event] = [e for e in hooks[event] if not any("tint" in (h.get("command") or "") for h in e.get("hooks", []))]
@@ -484,7 +487,30 @@ def install_hooks():
             entry["matcher"] = matcher
         hooks.setdefault(event, []).append(entry)
     settings["hooks"] = {k: v for k, v in hooks.items() if v}
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+# Dark backgrounds that read as different from each other at a glance.
+SEED_COLORS = ["#3d1512", "#12303d", "#1e3a20", "#33254a", "#3d2a10", "#0f3a3a", "#3a3712", "#252a45"]
+SEED_SKIP = {"worktrees"}
+
+
+def seed_config(code_dir=None):
+    """First install: one folder rule per project in ~/code. Returns False when a config already exists."""
+    if CONFIG_PATH.exists():
+        return False
+    code_dir = Path(code_dir or HOME / "code")
+    try:
+        names = sorted(d.name for d in code_dir.iterdir() if d.is_dir() and not d.name.startswith(".") and d.name not in SEED_SKIP)
+    except OSError:
+        names = []
+    folders = [
+        {"name": name, "pattern": "~/code/%s*" % name, "bg": SEED_COLORS[i % len(SEED_COLORS)]}
+        for i, name in enumerate(names)
+    ]
+    save_config(normalize_config({"folders": folders}))
+    return True
 
 
 # ---------------------------------------------------------------- web UI
@@ -656,6 +682,8 @@ def main(argv):
         install_hooks()
     elif cmd == "config-path":
         print(CONFIG_PATH)
+    elif cmd == "seed-config":
+        print("seeded" if seed_config() else "kept")
     else:
         print(__doc__)
 

@@ -1,13 +1,19 @@
 #!/bin/bash
 # Install ghostty-tint on this Mac. Safe to re-run.
 #   1. ~/.local/bin/tint            -> bin/tint (symlink)
-#   2. ~/.oh-my-zsh/custom/tint.zsh -> shell/tint.zsh (symlink)
-#   3. ~/.config/tint/config.json    created from the old ghostty-repo-colors.zsh
-#                                    mapping if missing (never overwritten)
-#   4. ~/.claude/settings.json       hooks that call `tint hook` (tint install-hooks)
+#   2. ~/.oh-my-zsh/custom/tint.zsh -> shell/tint.zsh (symlink), or without
+#      oh-my-zsh a `source` line appended to ~/.zshrc
+#   3. ~/.config/tint/config.json    created with one color per project folder
+#                                    in ~/code if missing (never overwritten)
+#   4. ~/.claude/settings.json       hooks that call `tint hook` (tint install-hooks),
+#                                    created if Claude Code has no settings file yet
 #   5. ~/Library/LaunchAgents/com.nateschmidt.ghostty-tint.plist
 #                                    keeps the web UI running on http://127.0.0.1:7337
 set -euo pipefail
+if ! python3 -c '' 2>/dev/null; then
+  echo "tint needs python3. Run: xcode-select --install   then run this installer again." >&2
+  exit 1
+fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${TINT_PORT:-7337}"
 LABEL=com.nateschmidt.ghostty-tint
@@ -25,39 +31,23 @@ if [ -d "$HOME/.oh-my-zsh/custom" ]; then
     echo "shell:  retired $old (kept as .replaced-by-tint)"
   fi
   echo "shell:  ~/.oh-my-zsh/custom/tint.zsh"
+elif grep -qs 'shell/tint\.zsh' "$HOME/.zshrc"; then
+  echo "shell:  ~/.zshrc already sources tint.zsh"
 else
-  echo "shell:  oh-my-zsh not found; add 'source $REPO/shell/tint.zsh' to ~/.zshrc" >&2
+  # Plain zsh, as on a new Mac: source the plugin from ~/.zshrc.
+  printf '\n# ghostty-tint: window colors by folder\nsource "%s/shell/tint.zsh"\n' "$REPO" >>"$HOME/.zshrc"
+  echo "shell:  added tint.zsh to ~/.zshrc (open a new window to pick it up)"
 fi
 
 CONFIG="$("$REPO/bin/tint" config-path)"
-mkdir -p "$(dirname "$CONFIG")"
-if [ ! -f "$CONFIG" ]; then
-  # Seed from the old ghostty-repo-colors.zsh mapping. Event colors come from
-  # the defaults in bin/tint; the UI fills in the rest.
-  cat >"$CONFIG" <<'JSON'
-{
-  "version": 1,
-  "folders": [
-    {"name": "Condoit Tags", "pattern": "~/code/condoit-tags*", "bg": "#3d2410"},
-    {"name": "InstaGift", "pattern": "~/code/instagift", "bg": "#2b5a75"},
-    {"name": "Cape Town (iCloud)", "pattern": "~/Library/Mobile Documents/com~apple~CloudDocs/Claude/capetown", "bg": "#1e2a20"},
-    {"name": "n8lb", "pattern": "~/code/n8lb*", "bg": "#2e58aa", "fg": "#f5f5f5", "cursor": "#3cc262", "palette": [
-      "#1a1a1a", "#ef4444", "#3cc262", "#f59e0b", "#7aa2e8", "#c084fc", "#4dd0c4", "#d4d4d4",
-      "#4a4a4a", "#f87171", "#5fd985", "#fbbf24", "#a8c4f0", "#d8b4fe", "#7ee7dc", "#ffffff"]},
-    {"name": "Rulings", "pattern": "~/code/rulings*", "bg": "#a0404b"},
-    {"name": "Cape Town", "pattern": "~/code/capetown-danish", "bg": "#073a25", "fg": "#f5e6b8"}
-  ]
-}
-JSON
-  echo "config: $CONFIG (seeded from the old folder mapping)"
+if [ "$("$REPO/bin/tint" seed-config)" = seeded ]; then
+  echo "config: $CONFIG (one color per project folder in ~/code)"
 else
   echo "config: $CONFIG (kept)"
 fi
 
-if [ -f "$HOME/.claude/settings.json" ]; then
-  "$REPO/bin/tint" install-hooks
-  echo "hooks:  ~/.claude/settings.json (tint hook on Stop, Notification, prompts, session start/end, AskUserQuestion)"
-fi
+"$REPO/bin/tint" install-hooks
+echo "hooks:  ~/.claude/settings.json (tint hook on Stop, Notification, prompts, session start/end, AskUserQuestion)"
 
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 mkdir -p "$HOME/Library/LaunchAgents"
